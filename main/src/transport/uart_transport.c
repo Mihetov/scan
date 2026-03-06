@@ -21,6 +21,10 @@ static transport_ctx_t s_transport;
 
 esp_err_t transport_init(void)
 {
+    if (s_transport.lock != NULL) {
+        return ESP_OK;
+    }
+
     memset(&s_transport, 0, sizeof(s_transport));
     s_transport.lock = xSemaphoreCreateMutex();
     if (s_transport.lock == NULL) {
@@ -97,7 +101,12 @@ esp_err_t transport_close(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    ESP_RETURN_ON_ERROR(uart_driver_delete(s_transport.status.uart_port), TAG, "uart_driver_delete failed");
+    esp_err_t err = uart_driver_delete(s_transport.status.uart_port);
+    if (err != ESP_OK) {
+        xSemaphoreGive(s_transport.lock);
+        return err;
+    }
+
     memset(&s_transport.status, 0, sizeof(s_transport.status));
     xSemaphoreGive(s_transport.lock);
     return ESP_OK;
@@ -135,6 +144,11 @@ esp_err_t transport_send_receive(const uint8_t *tx, size_t tx_len, uint8_t *rx, 
     if (written != (int)tx_len) {
         xSemaphoreGive(s_transport.lock);
         return ESP_FAIL;
+    }
+
+    if (uart_wait_tx_done(port, timeout) != ESP_OK) {
+        xSemaphoreGive(s_transport.lock);
+        return ESP_ERR_TIMEOUT;
     }
 
     int read = uart_read_bytes(port, rx, rx_max, timeout);

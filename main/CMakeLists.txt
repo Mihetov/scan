@@ -9,6 +9,7 @@ idf_component_register(
         "include"
     REQUIRES
         driver
+        esp_wifi
         esp_http_server
         cJSON
 )
