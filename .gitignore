@@ -40,7 +40,7 @@ sdkconfig
 managed_components/
 # If ESP-IDF tools are installed/referenced locally to the project
 .espressif/
-
+cJSON
 # CMake generated files
 CMakeCache.txt
 CMakeFiles/
@@ -60,7 +60,8 @@ dist/
 venv/
 .venv/
 env/
-
+components/
+cJSON
 # Language Servers
 .clangd/
 .ccls-cache/
@@ -76,3 +77,4 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+components/cJSON
