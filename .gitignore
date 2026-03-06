@@ -60,7 +60,8 @@ dist/
 venv/
 .venv/
 env/
-
+components/
+cJSON
 # Language Servers
 .clangd/
 .ccls-cache/
