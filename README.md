@@ -9,7 +9,6 @@
 Устройство поднимает Wi‑Fi сеть (SoftAP), принимает HTTP JSON‑RPC запросы и выполняет Modbus RTU обмен через UART.
 
 - Wi‑Fi SSID: `MCBackend`
-- Wi‑Fi пароль: `13@Rtyr13`
 - HTTP endpoint: `http://<ip_платы>:8080/rpc`
 
 ## Архитектура (4 слоя)
