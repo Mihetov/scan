@@ -12,4 +12,5 @@ idf_component_register(
         esp_wifi
         esp_http_server
         cJSON
+        nvs_flash
 )
