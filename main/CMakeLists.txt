@@ -11,4 +11,5 @@ idf_component_register(
         driver
         esp_http_server
         cJSON
+        nvs_flash
 )
