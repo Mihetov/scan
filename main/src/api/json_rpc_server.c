@@ -6,9 +6,11 @@
 
 #include "application/modbus_service.h"
 #include "cJSON.h"
+#include "driver/uart.h"
 #include "esp_check.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "protocol/modbus_protocol.h"
 
 static const char *TAG = "json_rpc_api";
 
@@ -51,17 +53,13 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *json)
     return err;
 }
 
-static esp_err_t parse_transport_cfg(cJSON *params, transport_uart_config_t *cfg)
+static esp_err_t parse_transport_cfg(cJSON *params, app_transport_uart_config_t *cfg)
 {
     if (params == NULL || cfg == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
     memset(cfg, 0, sizeof(*cfg));
-    cfg->parity = UART_PARITY_DISABLE;
-    cfg->stop_bits = UART_STOP_BITS_1;
-    cfg->data_bits = UART_DATA_8_BITS;
-    cfg->flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
     cfg->timeout_ms = 500;
 
     cJSON *port = cJSON_GetObjectItemCaseSensitive(params, "uart_port");
@@ -72,10 +70,13 @@ static esp_err_t parse_transport_cfg(cJSON *params, transport_uart_config_t *cfg
     if (!cJSON_IsNumber(port) || !cJSON_IsNumber(baud) || !cJSON_IsNumber(tx) || !cJSON_IsNumber(rx)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (port->valueint < APP_UART_PORT_0 || port->valueint > APP_UART_PORT_2 || baud->valueint <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     cJSON *timeout_ms = cJSON_GetObjectItemCaseSensitive(params, "timeout_ms");
 
-    cfg->uart_port = (uart_port_t)port->valueint;
+    cfg->uart_port = (app_uart_port_t)port->valueint;
     cfg->baud_rate = baud->valueint;
     cfg->tx_pin = tx->valueint;
     cfg->rx_pin = rx->valueint;
@@ -111,7 +112,7 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
     }
 
     if (strcmp(method, "transport.status") == 0) {
-        transport_status_t status = {0};
+        app_transport_status_t status = {0};
         if (app_transport_status(&status) != ESP_OK) {
             return json_rpc_error(id, -32001, "transport status error");
         }
@@ -135,7 +136,7 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
     }
 
     if (strcmp(method, "transport.open") == 0 || strcmp(method, "transport.switch") == 0) {
-        transport_uart_config_t cfg;
+        app_transport_uart_config_t cfg;
         if (parse_transport_cfg(params, &cfg) != ESP_OK) {
             return json_rpc_error(id, -32602, "invalid transport parameters");
         }
@@ -161,11 +162,14 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
         if (!cJSON_IsNumber(slave_id) || !cJSON_IsNumber(count) || parse_address_field(params, "address", &input.address) != ESP_OK) {
             return json_rpc_error(id, -32602, "invalid modbus.read parameters");
         }
+        if (slave_id->valueint < 0 || slave_id->valueint > UINT8_MAX || count->valueint <= 0 || count->valueint > APP_MODBUS_MAX_REG_VALUES) {
+            return json_rpc_error(id, -32602, "invalid slave_id/count range");
+        }
 
         input.slave_id = (uint8_t)slave_id->valueint;
         input.count = (uint16_t)count->valueint;
 
-        modbus_read_response_t response = {0};
+        app_read_response_t response = {0};
         esp_err_t err = (strcmp(method, "modbus.read") == 0)
                             ? app_modbus_read(&input, &response)
                             : app_modbus_read_group(&input, &response);
@@ -196,11 +200,14 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
         if (!cJSON_IsNumber(slave_id) || !cJSON_IsNumber(value) || parse_address_field(params, "address", &input.address) != ESP_OK) {
             return json_rpc_error(id, -32602, "invalid modbus.write parameters");
         }
+        if (slave_id->valueint < 0 || slave_id->valueint > UINT8_MAX || value->valueint < 0 || value->valueint > UINT16_MAX) {
+            return json_rpc_error(id, -32602, "invalid slave_id/value range");
+        }
 
         input.slave_id = (uint8_t)slave_id->valueint;
         input.value = (uint16_t)value->valueint;
 
-        modbus_write_response_t response = {0};
+        app_write_response_t response = {0};
         esp_err_t err = app_modbus_write(&input, &response);
         if (err != ESP_OK) {
             return json_rpc_error(id, -32011, esp_err_to_name(err));
@@ -222,10 +229,13 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
         if (!cJSON_IsNumber(slave_id) || !cJSON_IsArray(values) || parse_address_field(params, "address", &input.address) != ESP_OK) {
             return json_rpc_error(id, -32602, "invalid modbus.write_group parameters");
         }
+        if (slave_id->valueint < 0 || slave_id->valueint > UINT8_MAX) {
+            return json_rpc_error(id, -32602, "invalid slave_id range");
+        }
 
         input.slave_id = (uint8_t)slave_id->valueint;
         input.count = (uint16_t)cJSON_GetArraySize(values);
-        if (input.count == 0 || input.count > MODBUS_MAX_REG_VALUES) {
+        if (input.count == 0 || input.count > APP_MODBUS_MAX_REG_VALUES) {
             return json_rpc_error(id, -32602, "invalid values count");
         }
 
@@ -234,10 +244,13 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
             if (!cJSON_IsNumber(entry)) {
                 return json_rpc_error(id, -32602, "values must contain only numbers");
             }
+            if (entry->valueint < 0 || entry->valueint > UINT16_MAX) {
+                return json_rpc_error(id, -32602, "values out of uint16 range");
+            }
             input.values[i] = (uint16_t)entry->valueint;
         }
 
-        modbus_write_response_t response = {0};
+        app_write_response_t response = {0};
         esp_err_t err = app_modbus_write_group(&input, &response);
         if (err != ESP_OK) {
             return json_rpc_error(id, -32012, esp_err_to_name(err));
@@ -263,10 +276,14 @@ static esp_err_t rpc_handler(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
 
-    int received = httpd_req_recv(req, buf, len);
-    if (received <= 0) {
-        free(buf);
-        return httpd_resp_send_500(req);
+    size_t total = 0;
+    while (total < len) {
+        int received = httpd_req_recv(req, buf + total, len - total);
+        if (received <= 0) {
+            free(buf);
+            return httpd_resp_send_500(req);
+        }
+        total += (size_t)received;
     }
 
     cJSON *root = cJSON_ParseWithLength(buf, len);
@@ -277,15 +294,21 @@ static esp_err_t rpc_handler(httpd_req_t *req)
     }
 
     cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
+    bool id_is_local = false;
     cJSON *method = cJSON_GetObjectItemCaseSensitive(root, "method");
     cJSON *params = cJSON_GetObjectItemCaseSensitive(root, "params");
 
     if (id == NULL) {
         id = cJSON_CreateNull();
+        id_is_local = true;
     }
     if (!cJSON_IsString(method) || method->valuestring == NULL) {
         cJSON_Delete(root);
-        return send_json(req, json_rpc_error(id, -32600, "invalid request"));
+        cJSON *response = json_rpc_error(id, -32600, "invalid request");
+        if (id_is_local) {
+            cJSON_Delete(id);
+        }
+        return send_json(req, response);
     }
     cJSON *local_params = NULL;
     if (params == NULL) {
@@ -294,6 +317,9 @@ static esp_err_t rpc_handler(httpd_req_t *req)
     }
 
     cJSON *response = handle_method(id, method->valuestring, params);
+    if (id_is_local) {
+        cJSON_Delete(id);
+    }
     cJSON_Delete(local_params);
     cJSON_Delete(root);
     return send_json(req, response);

@@ -8,6 +8,8 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "protocol/modbus_protocol.h"
+#include "transport/uart_transport.h"
 
 typedef enum {
     APP_OP_READ = 0,
@@ -29,6 +31,46 @@ typedef struct {
 static const char *TAG = "modbus_service";
 
 static QueueHandle_t s_queue;
+
+static void app_fill_read_response(const modbus_read_response_t *src, app_read_response_t *dst)
+{
+    dst->slave_id = src->slave_id;
+    dst->address = src->address;
+    dst->count = src->count;
+    dst->function = (uint8_t)src->function;
+    dst->ok = src->ok;
+    memcpy(dst->values, src->values, sizeof(uint16_t) * src->count);
+}
+
+static void app_fill_write_response(const modbus_write_response_t *src, app_write_response_t *dst)
+{
+    dst->ok = src->ok;
+    dst->slave_id = src->slave_id;
+    dst->address = src->address;
+    dst->count = src->count;
+    dst->function = (uint8_t)src->function;
+}
+
+static esp_err_t app_convert_transport_cfg(const app_transport_uart_config_t *in, transport_uart_config_t *out)
+{
+    if (in == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (in->uart_port < APP_UART_PORT_0 || in->uart_port > APP_UART_PORT_2 || in->baud_rate <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    out->uart_port = (uart_port_t)in->uart_port;
+    out->baud_rate = in->baud_rate;
+    out->tx_pin = in->tx_pin;
+    out->rx_pin = in->rx_pin;
+    out->timeout_ms = in->timeout_ms;
+    out->parity = UART_PARITY_DISABLE;
+    out->stop_bits = UART_STOP_BITS_1;
+    out->data_bits = UART_DATA_8_BITS;
+    out->flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+    return ESP_OK;
+}
 
 static esp_err_t app_execute_read(const app_read_input_t *input, modbus_read_response_t *out)
 {
@@ -140,14 +182,18 @@ esp_err_t app_service_init(void)
     return ESP_OK;
 }
 
-esp_err_t app_transport_open(const transport_uart_config_t *cfg)
+esp_err_t app_transport_open(const app_transport_uart_config_t *cfg)
 {
-    return transport_open(cfg);
+    transport_uart_config_t transport_cfg;
+    ESP_RETURN_ON_ERROR(app_convert_transport_cfg(cfg, &transport_cfg), TAG, "invalid app transport config");
+    return transport_open(&transport_cfg);
 }
 
-esp_err_t app_transport_switch(const transport_uart_config_t *cfg)
+esp_err_t app_transport_switch(const app_transport_uart_config_t *cfg)
 {
-    return transport_switch(cfg);
+    transport_uart_config_t transport_cfg;
+    ESP_RETURN_ON_ERROR(app_convert_transport_cfg(cfg, &transport_cfg), TAG, "invalid app transport config");
+    return transport_switch(&transport_cfg);
 }
 
 esp_err_t app_transport_close(void)
@@ -155,9 +201,23 @@ esp_err_t app_transport_close(void)
     return transport_close();
 }
 
-esp_err_t app_transport_status(transport_status_t *status)
+esp_err_t app_transport_status(app_transport_status_t *status)
 {
-    return transport_status_get(status);
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    transport_status_t transport_status = {0};
+    ESP_RETURN_ON_ERROR(transport_status_get(&transport_status), TAG, "transport status failed");
+
+    status->is_open = transport_status.is_open;
+    status->uart_port = (app_uart_port_t)transport_status.uart_port;
+    status->baud_rate = transport_status.baud_rate;
+    status->tx_pin = transport_status.tx_pin;
+    status->rx_pin = transport_status.rx_pin;
+    status->timeout_ms = transport_status.timeout_ms;
+
+    return ESP_OK;
 }
 
 static esp_err_t app_submit_job(app_job_t *job)
@@ -186,9 +246,9 @@ static esp_err_t app_submit_job(app_job_t *job)
     return job->result;
 }
 
-esp_err_t app_modbus_read(const app_read_input_t *input, modbus_read_response_t *out_response)
+esp_err_t app_modbus_read(const app_read_input_t *input, app_read_response_t *out_response)
 {
-    if (input == NULL || out_response == NULL || input->count == 0 || input->count > MODBUS_MAX_REG_VALUES) {
+    if (input == NULL || out_response == NULL || input->count == 0 || input->count > APP_MODBUS_MAX_REG_VALUES) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -199,17 +259,17 @@ esp_err_t app_modbus_read(const app_read_input_t *input, modbus_read_response_t 
 
     esp_err_t err = app_submit_job(&job);
     if (err == ESP_OK) {
-        *out_response = job.read_response;
+        app_fill_read_response(&job.read_response, out_response);
     }
     return err;
 }
 
-esp_err_t app_modbus_read_group(const app_read_input_t *input, modbus_read_response_t *out_response)
+esp_err_t app_modbus_read_group(const app_read_input_t *input, app_read_response_t *out_response)
 {
     return app_modbus_read(input, out_response);
 }
 
-esp_err_t app_modbus_write(const app_write_input_t *input, modbus_write_response_t *out_response)
+esp_err_t app_modbus_write(const app_write_input_t *input, app_write_response_t *out_response)
 {
     if (input == NULL || out_response == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -222,14 +282,14 @@ esp_err_t app_modbus_write(const app_write_input_t *input, modbus_write_response
 
     esp_err_t err = app_submit_job(&job);
     if (err == ESP_OK) {
-        *out_response = job.write_response;
+        app_fill_write_response(&job.write_response, out_response);
     }
     return err;
 }
 
-esp_err_t app_modbus_write_group(const app_write_group_input_t *input, modbus_write_response_t *out_response)
+esp_err_t app_modbus_write_group(const app_write_group_input_t *input, app_write_response_t *out_response)
 {
-    if (input == NULL || out_response == NULL || input->count == 0 || input->count > MODBUS_MAX_REG_VALUES) {
+    if (input == NULL || out_response == NULL || input->count == 0 || input->count > APP_MODBUS_MAX_REG_VALUES) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -240,7 +300,7 @@ esp_err_t app_modbus_write_group(const app_write_group_input_t *input, modbus_wr
 
     esp_err_t err = app_submit_job(&job);
     if (err == ESP_OK) {
-        *out_response = job.write_response;
+        app_fill_write_response(&job.write_response, out_response);
     }
     return err;
 }
