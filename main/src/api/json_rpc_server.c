@@ -46,6 +46,11 @@ static cJSON *json_rpc_ok(cJSON *id, cJSON *result)
 
 static esp_err_t send_json(httpd_req_t *req, cJSON *json)
 {
+    // === CORS заголовки для всех ответов ===
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+
     char *text = cJSON_PrintUnformatted(json);
     if (text == NULL) {
         cJSON_Delete(json);
@@ -460,6 +465,17 @@ static esp_err_t rpc_handler(httpd_req_t *req)
     return send_json(req, response);
 }
 
+static esp_err_t options_handler(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    httpd_resp_set_hdr(req, "Access-Control-Max-Age", "86400");
+
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 esp_err_t json_rpc_server_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
@@ -468,14 +484,23 @@ esp_err_t json_rpc_server_start(void)
     httpd_handle_t handle = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&handle, &cfg), TAG, "httpd_start failed");
 
-    httpd_uri_t uri = {
+    // POST handler (уже был)
+    httpd_uri_t uri_post = {
         .uri = "/rpc",
         .method = HTTP_POST,
         .handler = rpc_handler,
         .user_ctx = NULL,
     };
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(handle, &uri_post), TAG, "uri register failed");
 
-    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(handle, &uri), TAG, "uri register failed");
+    // === НОВОЕ: OPTIONS handler для CORS ===
+    httpd_uri_t uri_options = {
+    .uri = "/rpc",
+    .method = HTTP_OPTIONS,
+    .handler = options_handler,
+    .user_ctx = NULL,
+    };
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(handle, &uri_options), TAG, "uri options register failed");
 
     ESP_LOGI(TAG, "JSON-RPC server started on port %d", cfg.server_port);
     return ESP_OK;

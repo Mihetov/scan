@@ -247,8 +247,10 @@ esp_err_t app_wifi_service_init(void)
     }
 
     memset(&s_wifi, 0, sizeof(s_wifi));
+
     s_wifi.lock = xSemaphoreCreateMutex();
     s_wifi.events = xEventGroupCreate();
+
     if (s_wifi.lock == NULL || s_wifi.events == NULL) {
         return ESP_ERR_NO_MEM;
     }
@@ -256,17 +258,49 @@ esp_err_t app_wifi_service_init(void)
     app_wifi_apply_defaults();
     app_wifi_load_cfg_nvs();
 
+    // ИНИЦИАЛИЗАЦИЯ СЕТЕВОГО СТЕКА
+    ESP_ERROR_CHECK(esp_netif_init());
+
+    // СОЗДАНИЕ WIFI ИНТЕРФЕЙСОВ
     esp_netif_create_default_wifi_sta();
     esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_RETURN_ON_ERROR(esp_wifi_init(&wifi_init_cfg), TAG, "esp_wifi_init failed");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "esp_wifi_set_storage failed");
 
-    ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &app_wifi_event_handler, NULL), TAG, "register WIFI_EVENT failed");
-    ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &app_wifi_event_handler, NULL), TAG, "register IP_EVENT failed");
+    ESP_RETURN_ON_ERROR(
+        esp_wifi_init(&wifi_init_cfg),
+        TAG,
+        "esp_wifi_init failed"
+    );
+
+    ESP_RETURN_ON_ERROR(
+        esp_wifi_set_storage(WIFI_STORAGE_RAM),
+        TAG,
+        "esp_wifi_set_storage failed"
+    );
+
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_register(
+            WIFI_EVENT,
+            ESP_EVENT_ANY_ID,
+            &app_wifi_event_handler,
+            NULL),
+        TAG,
+        "register WIFI_EVENT failed"
+    );
+
+    ESP_RETURN_ON_ERROR(
+        esp_event_handler_register(
+            IP_EVENT,
+            IP_EVENT_STA_GOT_IP,
+            &app_wifi_event_handler,
+            NULL),
+        TAG,
+        "register IP_EVENT failed"
+    );
 
     s_wifi.initialized = true;
+
     return ESP_OK;
 }
 

@@ -295,12 +295,12 @@ static esp_err_t app_submit_job(app_job_t *job)
 
     ESP_LOGD(TAG, "app_submit_job: enqueue op=%s", app_op_to_str(job->op));
     app_job_t *queued = job;
-    if (xQueueSend(s_queue, &queued, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    if (xQueueSend(s_queue, &queued, pdMS_TO_TICKS(100)) != pdTRUE) {
         vSemaphoreDelete(job->done);
         return ESP_ERR_TIMEOUT;
     }
 
-    if (xSemaphoreTake(job->done, pdMS_TO_TICKS(5000)) != pdTRUE) {
+    if (xSemaphoreTake(job->done, pdMS_TO_TICKS(2000)) != pdTRUE) {
         vSemaphoreDelete(job->done);
         return ESP_ERR_TIMEOUT;
     }
