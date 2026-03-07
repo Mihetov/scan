@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "application/modbus_service.h"
+#include "application/wifi_service.h"
 #include "cJSON.h"
 #include "driver/uart.h"
 #include "esp_check.h"
@@ -13,6 +14,11 @@
 #include "protocol/modbus_protocol.h"
 
 static const char *TAG = "json_rpc_api";
+
+static void json_rpc_log_error_debug(const char *stage, esp_err_t err)
+{
+    ESP_LOGD(TAG, "%s failed: %s (0x%x)", stage, esp_err_to_name(err), (unsigned)err);
+}
 
 static cJSON *json_rpc_result_base(cJSON *id)
 {
@@ -91,20 +97,84 @@ static esp_err_t parse_address_field(cJSON *params, const char *field, uint16_t 
 {
     cJSON *addr = cJSON_GetObjectItemCaseSensitive(params, field);
     if (cJSON_IsString(addr) && addr->valuestring != NULL) {
-        return modbus_parse_address(addr->valuestring, out);
+        esp_err_t err = modbus_parse_address(addr->valuestring, out);
+        if (err != ESP_OK) {
+            ESP_LOGD(TAG, "parse_address_field: field=%s text=%s err=%s", field, addr->valuestring, esp_err_to_name(err));
+        } else {
+            ESP_LOGD(TAG, "parse_address_field: field=%s parsed=0x%04X", field, *out);
+        }
+        return err;
     }
     if (cJSON_IsNumber(addr)) {
         if (addr->valueint < 0 || addr->valueint > UINT16_MAX) {
+            ESP_LOGD(TAG, "parse_address_field: field=%s number out of range=%d", field, addr->valueint);
             return ESP_ERR_INVALID_ARG;
         }
         *out = (uint16_t)addr->valueint;
+        ESP_LOGD(TAG, "parse_address_field: field=%s parsed=0x%04X", field, *out);
         return ESP_OK;
     }
+    ESP_LOGD(TAG, "parse_address_field: field=%s missing or invalid type", field);
     return ESP_ERR_INVALID_ARG;
+}
+
+static esp_err_t parse_wifi_sta_config(cJSON *params, app_wifi_sta_config_t *out)
+{
+    if (params == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *ssid = cJSON_GetObjectItemCaseSensitive(params, "ssid");
+    cJSON *password = cJSON_GetObjectItemCaseSensitive(params, "password");
+    if (!cJSON_IsString(ssid) || ssid->valuestring == NULL || !cJSON_IsString(password) || password->valuestring == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t ssid_len = strlen(ssid->valuestring);
+    size_t pass_len = strlen(password->valuestring);
+    if (ssid_len == 0 || ssid_len >= sizeof(out->ssid) || pass_len >= sizeof(out->password)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(out, 0, sizeof(*out));
+    memcpy(out->ssid, ssid->valuestring, ssid_len);
+    memcpy(out->password, password->valuestring, pass_len);
+    return ESP_OK;
+}
+
+static esp_err_t parse_wifi_ap_config(cJSON *params, app_wifi_ap_config_t *out)
+{
+    if (params == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON *ssid = cJSON_GetObjectItemCaseSensitive(params, "ssid");
+    cJSON *password = cJSON_GetObjectItemCaseSensitive(params, "password");
+    if (!cJSON_IsString(ssid) || ssid->valuestring == NULL || !cJSON_IsString(password) || password->valuestring == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    size_t ssid_len = strlen(ssid->valuestring);
+    size_t pass_len = strlen(password->valuestring);
+    if (ssid_len == 0 || ssid_len >= sizeof(out->ssid) || pass_len >= sizeof(out->password)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(out, 0, sizeof(*out));
+    memcpy(out->ssid, ssid->valuestring, ssid_len);
+    memcpy(out->password, password->valuestring, pass_len);
+
+    cJSON *channel = cJSON_GetObjectItemCaseSensitive(params, "channel");
+    cJSON *max_conn = cJSON_GetObjectItemCaseSensitive(params, "max_connection");
+    out->channel = (cJSON_IsNumber(channel) && channel->valueint > 0 && channel->valueint <= 13) ? (uint8_t)channel->valueint : 1;
+    out->max_connection = (cJSON_IsNumber(max_conn) && max_conn->valueint > 0 && max_conn->valueint <= 10) ? (uint8_t)max_conn->valueint : 4;
+
+    return ESP_OK;
 }
 
 static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
 {
+    ESP_LOGD(TAG, "handle_method: method=%s", method);
     if (strcmp(method, "ping") == 0) {
         cJSON *result = cJSON_CreateObject();
         cJSON_AddStringToObject(result, "status", "ok");
@@ -155,11 +225,70 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
         return json_rpc_ok(id, cJSON_CreateTrue());
     }
 
+    if (strcmp(method, "wifi.status") == 0) {
+        app_wifi_status_t status = {0};
+        esp_err_t err = app_wifi_get_status(&status);
+        if (err != ESP_OK) {
+            return json_rpc_error(id, -32020, esp_err_to_name(err));
+        }
+
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddNumberToObject(result, "active_mode", status.active_mode);
+        cJSON_AddBoolToObject(result, "sta_connected", status.sta_connected);
+        cJSON_AddNumberToObject(result, "last_sta_disconnect_reason", status.last_sta_disconnect_reason);
+        cJSON *sta = cJSON_AddObjectToObject(result, "sta");
+        cJSON_AddStringToObject(sta, "ssid", status.sta.ssid);
+        cJSON *ap = cJSON_AddObjectToObject(result, "ap");
+        cJSON_AddStringToObject(ap, "ssid", status.ap.ssid);
+        cJSON_AddNumberToObject(ap, "channel", status.ap.channel);
+        cJSON_AddNumberToObject(ap, "max_connection", status.ap.max_connection);
+        return json_rpc_ok(id, result);
+    }
+
+    if (strcmp(method, "wifi.set_sta") == 0) {
+        app_wifi_sta_config_t cfg = {0};
+        if (parse_wifi_sta_config(params, &cfg) != ESP_OK) {
+            return json_rpc_error(id, -32602, "invalid wifi.set_sta parameters");
+        }
+
+        esp_err_t err = app_wifi_set_sta_config(&cfg);
+        if (err != ESP_OK) {
+            return json_rpc_error(id, -32021, esp_err_to_name(err));
+        }
+
+        return json_rpc_ok(id, cJSON_CreateTrue());
+    }
+
+    if (strcmp(method, "wifi.set_ap") == 0) {
+        app_wifi_ap_config_t cfg = {0};
+        if (parse_wifi_ap_config(params, &cfg) != ESP_OK) {
+            return json_rpc_error(id, -32602, "invalid wifi.set_ap parameters");
+        }
+
+        esp_err_t err = app_wifi_set_ap_config(&cfg);
+        if (err != ESP_OK) {
+            return json_rpc_error(id, -32022, esp_err_to_name(err));
+        }
+
+        return json_rpc_ok(id, cJSON_CreateTrue());
+    }
+
+    if (strcmp(method, "wifi.apply") == 0) {
+        esp_err_t err = app_wifi_apply();
+        if (err != ESP_OK) {
+            return json_rpc_error(id, -32023, esp_err_to_name(err));
+        }
+        return json_rpc_ok(id, cJSON_CreateTrue());
+    }
+
     if (strcmp(method, "modbus.read") == 0 || strcmp(method, "modbus.read_group") == 0) {
         app_read_input_t input = {0};
         cJSON *slave_id = cJSON_GetObjectItemCaseSensitive(params, "slave_id");
         cJSON *count = cJSON_GetObjectItemCaseSensitive(params, "count");
-        if (!cJSON_IsNumber(slave_id) || !cJSON_IsNumber(count) || parse_address_field(params, "address", &input.address) != ESP_OK) {
+        esp_err_t parse_addr_err = parse_address_field(params, "address", &input.address);
+        if (!cJSON_IsNumber(slave_id) || !cJSON_IsNumber(count) || parse_addr_err != ESP_OK) {
+            ESP_LOGD(TAG, "modbus.read invalid params: slave_id_is_num=%d count_is_num=%d parse_addr_err=%s",
+                     cJSON_IsNumber(slave_id), cJSON_IsNumber(count), esp_err_to_name(parse_addr_err));
             return json_rpc_error(id, -32602, "invalid modbus.read parameters");
         }
         if (slave_id->valueint < 0 || slave_id->valueint > UINT8_MAX || count->valueint <= 0 || count->valueint > APP_MODBUS_MAX_REG_VALUES) {
@@ -168,6 +297,9 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
 
         input.slave_id = (uint8_t)slave_id->valueint;
         input.count = (uint16_t)count->valueint;
+      
+        ESP_LOGD(TAG, "modbus.read request: slave_id=%u address=0x%04X count=%u",
+                 input.slave_id, input.address, input.count);
 
         app_read_response_t response = {0};
         esp_err_t err = (strcmp(method, "modbus.read") == 0)
@@ -175,6 +307,7 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
                             : app_modbus_read_group(&input, &response);
 
         if (err != ESP_OK) {
+            json_rpc_log_error_debug("app_modbus_read", err);
             return json_rpc_error(id, -32010, esp_err_to_name(err));
         }
 
@@ -285,6 +418,8 @@ static esp_err_t rpc_handler(httpd_req_t *req)
         }
         total += (size_t)received;
     }
+
+    ESP_LOGD(TAG, "rpc_handler: request bytes=%u payload=%.*s", (unsigned)len, (int)len, buf);
 
     cJSON *root = cJSON_ParseWithLength(buf, len);
     free(buf);

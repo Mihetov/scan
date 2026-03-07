@@ -137,6 +137,14 @@ esp_err_t transport_close(void)
         return err;
     }
 
+    ESP_LOGD(TAG, "transport_close: closing port=%d", (int)s_transport.status.uart_port);
+
+    esp_err_t err = uart_driver_delete(s_transport.status.uart_port);
+    if (err != ESP_OK) {
+        xSemaphoreGive(s_transport.lock);
+        return err;
+    }
+
     memset(&s_transport.status, 0, sizeof(s_transport.status));
     xSemaphoreGive(s_transport.lock);
     return ESP_OK;
