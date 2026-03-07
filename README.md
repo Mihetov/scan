@@ -1,96 +1,130 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-S2 | ESP32-S3 | ESP32-P4 | ESP32-H2 |
-| ----------------- | ----- | -------- | -------- | -------- | --------- | -------- | -------- | -------- | -------- | -------- |
+# ESP32 Modbus Config Backend (ESP-IDF)
 
-# Wi-Fi Scan Example
+Прошивка для **ESP32-DevKitV1 (ESP32-WROOM-32)**, реализующая серверную часть конфигуратора Modbus.
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+Проект построен на **ESP-IDF 5.5.3** и использует **FreeRTOS** для многозадачной обработки запросов.
 
-This example shows how to scan for available set of APs.
+## Назначение
 
-## How to use example
+Устройство сначала пытается подключиться к заданной Wi‑Fi сети (STA): **5 попыток**, каждая с интервалом **30 секунд**. Если подключение не удалось — автоматически поднимает собственную сеть SoftAP и продолжает работу backend.
 
-Before project configuration and build, be sure to set the correct chip target using `idf.py set-target <chip_name>`.
+- SoftAP SSID по умолчанию: `MCBackend`
+- SoftAP пароль по умолчанию: `13@Rtyr13`
+- HTTP endpoint: `http://<ip_платы>:8080/rpc`
 
-### Hardware Required
+## Архитектура (4 слоя)
 
-* A development board with ESP32/ESP32-S2/ESP32-C3 SoC (e.g., ESP32-DevKitC, ESP-WROVER-KIT, etc.).
-* A USB cable for Power supply and programming.
+### 1) Transport Layer
+Отвечает за UART транспорт:
+- открытие / закрытие / переключение UART;
+- байтовый обмен (TX/RX);
+- контроль статуса транспорта.
 
-### Configure the project
+### 2) Protocol Layer
+Отвечает за Modbus RTU кадры:
+- построение ADU запросов;
+- разбор ответов;
+- CRC16;
+- парсинг адресов регистров из decimal и hex-строки.
 
-Open the project configuration menu (`idf.py menuconfig`).
+### 3) Application Layer
+Бизнес-логика и orchestration:
+- управление транспортом;
+- постановка задач чтения/записи в очередь;
+- выполнение Modbus операций в рабочей FreeRTOS задаче.
 
-In the `Example Configuration` menu:
+### 4) API Layer
+HTTP JSON‑RPC сервер:
+- прием POST запросов;
+- валидация параметров;
+- преобразование DTO ↔ вызовы Application Layer;
+- JSON‑RPC ответы/ошибки.
 
-* Set the Example configuration.
-    * Use `Max size of scan list` to set the maximum number of access points in the list.
-    * Use 'Scan Channel list' to list specific channels you wish to scan. For eg. 1,6,9,11. By Default all channels will be scanned.
+## Поддерживаемые JSON‑RPC методы
 
-### Build and Flash
+- `ping`
+- `transport.status`
+- `transport.serial_ports`
+- `transport.open`
+- `transport.switch`
+- `transport.close`
+- `wifi.status`
+- `wifi.set_sta`
+- `wifi.set_ap`
+- `wifi.apply`
+- `modbus.read`
+- `modbus.read_group`
+- `modbus.write`
+- `modbus.write_group`
 
-Build the project and flash it to the board, then run the monitor tool to view the serial output:
+## Поддержка адресов регистров
 
-Run `idf.py -p PORT flash monitor` to build, flash and monitor the project.
+Поле `address` поддерживает:
+- decimal: `100`
+- hex-string: `0x0064`, `0xF020`
 
-(To exit the serial monitor, type ``Ctrl-]``.)
+## Формат ответа на чтение
 
-See the Getting Started Guide for all the steps to configure and use the ESP-IDF to build projects.
+Для операций чтения возвращаются поля:
+- `slave_id`
+- `address`
+- `count`
+- `function`
+- `values`
+- `ok`
 
-* [ESP-IDF Getting Started Guide on ESP32](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html)
-* [ESP-IDF Getting Started Guide on ESP32-S2](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s2/get-started/index.html)
-* [ESP-IDF Getting Started Guide on ESP32-C3](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/index.html)
+## Быстрый старт
 
-## Example Output
-
-As you run the example, you will see the following log:
-
-```
-I (443) wifi:wifi firmware version: 6bff005
-I (443) wifi:wifi certification version: v7.0
-I (443) wifi:config NVS flash: enabled
-I (443) wifi:config nano formatting: disabled
-I (453) wifi:Init data frame dynamic rx buffer num: 32
-I (453) wifi:Init management frame dynamic rx buffer num: 32
-I (463) wifi:Init management short buffer num: 32
-I (463) wifi:Init dynamic tx buffer num: 32
-I (473) wifi:Init static tx FG buffer num: 2
-I (473) wifi:Init static rx buffer size: 1600
-I (473) wifi:Init static rx buffer num: 10
-I (483) wifi:Init dynamic rx buffer num: 32
-I (483) wifi_init: rx ba win: 6
-I (493) wifi_init: tcpip mbox: 32
-I (493) wifi_init: udp mbox: 6
-I (493) wifi_init: tcp mbox: 6
-I (503) wifi_init: tcp tx win: 5744
-I (503) wifi_init: tcp rx win: 5744
-I (513) wifi_init: tcp mss: 1440
-I (513) wifi_init: WiFi IRAM OP enabled
-I (513) wifi_init: WiFi RX IRAM OP enabled
-I (533) phy_init: phy_version 300,6e46ba7,Jan 25 2021
-I (683) wifi:set rx active PTI: 0, rx ack PTI: 0, and default PTI: 0
-I (683) wifi:mode : sta (7c:df:a1:40:23:84)
-I (683) wifi:enable tsf
-I (2783) scan: Total APs scanned = 17
-I (2783) scan: SSID 		IoTNetwork
-I (2783) scan: RSSI 		-50
-I (2783) scan: Authmode 	WIFI_AUTH_WPA2_PSK
-I (2783) scan: Pairwise Cipher 	WIFI_CIPHER_TYPE_CCMP
-I (2793) scan: Group Cipher 	WIFI_CIPHER_TYPE_CCMP
-I (2793) scan: Channel 		5
-
-I (2883) scan: SSID 		TP-Link_6872
-I (2883) scan: RSSI 		-70
-I (2883) scan: Authmode 	WIFI_AUTH_WPA_WPA2_PSK
-I (2893) scan: Pairwise Cipher 	WIFI_CIPHER_TYPE_CCMP
-I (2893) scan: Group Cipher 	WIFI_CIPHER_TYPE_CCMP
-I (2903) scan: Channel 		11
-...
+### 1. Выбор target
+```bash
+idf.py set-target esp32
 ```
 
-## Running the example on ESP Chips without Wi-Fi
+### 2. Сборка
+```bash
+idf.py build
+```
 
-This example can run on ESP Chips without Wi-Fi using ESP-Hosted. See the [Two-Chip Solution](../README.md#wi-fi-examples-with-two-chip-solution) section in the upper level `README.md` for information.
+### 3. Прошивка и монитор
+```bash
+idf.py -p <PORT> flash monitor
+```
 
-## Troubleshooting
+После запуска:
+1. Подключитесь к Wi‑Fi сети `MCBackend`.
+2. Отправляйте JSON‑RPC POST запросы на `http://<ip_платы>:8080/rpc`.
 
-For any technical queries, please open an [issue](https://github.com/espressif/esp-idf/issues) on GitHub. We will get back to you soon.
+## Пример запроса
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "ping",
+  "params": {}
+}
+```
+
+## Пример ответа
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "status": "ok"
+  }
+}
+```
+
+## Требования
+
+- ESP-IDF `v5.5.3`
+- Плата ESP32 DevKit (ESP32-WROOM-32)
+- USB-UART подключение для прошивки/логов
+- Modbus RTU устройство на UART линии
+
+## Примечания
+
+- Проект ориентирован на промышленный сценарий: слоистая архитектура, многозадачность, расширяемость.
+- Рекомендуется фиксировать параметры UART и таймауты под конкретную нагрузку и линию связи.

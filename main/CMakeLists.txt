@@ -4,11 +4,15 @@ idf_component_register(
         "src/transport/uart_transport.c"
         "src/protocol/modbus_protocol.c"
         "src/application/modbus_service.c"
+        "src/application/wifi_service.c"
         "src/api/json_rpc_server.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         driver
+        esp_netif
+        esp_wifi
         esp_http_server
         cJSON
+        nvs_flash
 )
