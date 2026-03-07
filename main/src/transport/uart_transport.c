@@ -12,6 +12,17 @@
 
 static const char *TAG = "uart_transport";
 
+static void transport_log_hex_debug(const char *label, const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0) {
+        ESP_LOGD(TAG, "%s: <empty>", label);
+        return;
+    }
+
+    ESP_LOGD(TAG, "%s: len=%u", label, (unsigned)len);
+    ESP_LOG_BUFFER_HEX_LEVEL(TAG, data, len, ESP_LOG_DEBUG);
+}
+
 typedef struct {
     transport_status_t status;
     SemaphoreHandle_t lock;
@@ -22,6 +33,7 @@ static transport_ctx_t s_transport;
 esp_err_t transport_init(void)
 {
     if (s_transport.lock != NULL) {
+        ESP_LOGD(TAG, "transport_init: already initialized");
         return ESP_OK;
     }
 
@@ -30,11 +42,25 @@ esp_err_t transport_init(void)
     if (s_transport.lock == NULL) {
         return ESP_ERR_NO_MEM;
     }
+
+    ESP_LOGD(TAG, "transport_init: mutex created");
     return ESP_OK;
 }
 
 static esp_err_t transport_open_locked(const transport_uart_config_t *cfg)
 {
+    ESP_LOGD(TAG,
+             "open_locked: port=%d baud=%d tx=%d rx=%d parity=%d stop=%d data=%d flow=%d timeout_ms=%u",
+             (int)cfg->uart_port,
+             cfg->baud_rate,
+             cfg->tx_pin,
+             cfg->rx_pin,
+             (int)cfg->parity,
+             (int)cfg->stop_bits,
+             (int)cfg->data_bits,
+             (int)cfg->flow_ctrl,
+             (unsigned)cfg->timeout_ms);
+
     uart_config_t uart_cfg = {
         .baud_rate = cfg->baud_rate,
         .data_bits = cfg->data_bits,
@@ -67,6 +93,7 @@ esp_err_t transport_open(const transport_uart_config_t *cfg)
 
     xSemaphoreTake(s_transport.lock, portMAX_DELAY);
     if (s_transport.status.is_open) {
+        ESP_LOGD(TAG, "transport_open: already open on port=%d", (int)s_transport.status.uart_port);
         xSemaphoreGive(s_transport.lock);
         return ESP_ERR_INVALID_STATE;
     }
@@ -84,6 +111,7 @@ esp_err_t transport_switch(const transport_uart_config_t *cfg)
 
     xSemaphoreTake(s_transport.lock, portMAX_DELAY);
     if (s_transport.status.is_open) {
+        ESP_LOGD(TAG, "transport_switch: closing current port=%d", (int)s_transport.status.uart_port);
         uart_driver_delete(s_transport.status.uart_port);
         s_transport.status.is_open = false;
     }
@@ -97,10 +125,12 @@ esp_err_t transport_close(void)
 {
     xSemaphoreTake(s_transport.lock, portMAX_DELAY);
     if (!s_transport.status.is_open) {
+        ESP_LOGD(TAG, "transport_close: transport already closed");
         xSemaphoreGive(s_transport.lock);
         return ESP_ERR_INVALID_STATE;
     }
-
+  
+    ESP_LOGD(TAG, "transport_close: closing port=%d", (int)s_transport.status.uart_port);
     esp_err_t err = uart_driver_delete(s_transport.status.uart_port);
     if (err != ESP_OK) {
         xSemaphoreGive(s_transport.lock);
@@ -120,6 +150,14 @@ esp_err_t transport_status_get(transport_status_t *out_status)
 
     xSemaphoreTake(s_transport.lock, portMAX_DELAY);
     *out_status = s_transport.status;
+    ESP_LOGD(TAG,
+             "status_get: is_open=%d port=%d baud=%d tx=%d rx=%d timeout_ms=%u",
+             (int)out_status->is_open,
+             (int)out_status->uart_port,
+             out_status->baud_rate,
+             out_status->tx_pin,
+             out_status->rx_pin,
+             (unsigned)out_status->timeout_ms);
     xSemaphoreGive(s_transport.lock);
     return ESP_OK;
 }
@@ -137,7 +175,16 @@ esp_err_t transport_send_receive(const uint8_t *tx, size_t tx_len, uint8_t *rx, 
     }
 
     uart_port_t port = s_transport.status.uart_port;
-    TickType_t timeout = pdMS_TO_TICKS(s_transport.status.timeout_ms > 0 ? s_transport.status.timeout_ms : 500);
+    uint32_t timeout_ms = s_transport.status.timeout_ms > 0 ? s_transport.status.timeout_ms : 500;
+    TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+
+    ESP_LOGD(TAG,
+             "send_receive: port=%d tx_len=%u rx_max=%u timeout_ms=%u",
+             (int)port,
+             (unsigned)tx_len,
+             (unsigned)rx_max,
+             (unsigned)timeout_ms);
+    transport_log_hex_debug("tx", tx, tx_len);
 
     uart_flush_input(port);
     int written = uart_write_bytes(port, tx, tx_len);
@@ -158,6 +205,8 @@ esp_err_t transport_send_receive(const uint8_t *tx, size_t tx_len, uint8_t *rx, 
     }
 
     *rx_len = (size_t)read;
+    transport_log_hex_debug("rx", rx, *rx_len);
+
     xSemaphoreGive(s_transport.lock);
     return ESP_OK;
 }
