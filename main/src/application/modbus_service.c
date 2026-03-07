@@ -32,6 +32,7 @@ static const char *TAG = "modbus_service";
 
 static QueueHandle_t s_queue;
 
+
 static const char *app_op_to_str(app_op_t op)
 {
     switch (op) {
@@ -45,7 +46,6 @@ static const char *app_op_to_str(app_op_t op)
             return "unknown";
     }
 }
-
 static void app_fill_read_response(const modbus_read_response_t *src, app_read_response_t *dst)
 {
     dst->slave_id = src->slave_id;
@@ -315,6 +315,7 @@ esp_err_t app_modbus_read(const app_read_input_t *input, app_read_response_t *ou
     if (input == NULL || out_response == NULL || input->count == 0 || input->count > APP_MODBUS_MAX_REG_VALUES) {
         ESP_LOGD(TAG, "app_modbus_read invalid args: input=%p out=%p count=%u",
                  (void *)input, (void *)out_response, input ? input->count : 0);
+
         return ESP_ERR_INVALID_ARG;
     }
 

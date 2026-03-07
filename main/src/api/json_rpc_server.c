@@ -297,7 +297,7 @@ static cJSON *handle_method(cJSON *id, const char *method, cJSON *params)
 
         input.slave_id = (uint8_t)slave_id->valueint;
         input.count = (uint16_t)count->valueint;
-
+      
         ESP_LOGD(TAG, "modbus.read request: slave_id=%u address=0x%04X count=%u",
                  input.slave_id, input.address, input.count);
 
