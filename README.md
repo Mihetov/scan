@@ -9,7 +9,6 @@
 Устройство поднимает Wi‑Fi сеть (SoftAP), принимает HTTP JSON‑RPC запросы и выполняет Modbus RTU обмен через UART.
 
 - Wi‑Fi SSID: `MCBackend`
-- Wi‑Fi пароль: `13@Rtyr13`
 - HTTP endpoint: `http://<ip_платы>:8080/rpc`
 
 ## Архитектура (4 слоя)
@@ -102,6 +101,44 @@ idf.py -p <PORT> flash monitor
 ```
 
 ## Пример ответа
+=======
+
+Поле `address` поддерживает:
+- decimal: `100`
+- hex-string: `0x0064`, `0xF020`
+
+## Формат ответа на чтение
+
+Для операций чтения возвращаются поля:
+- `slave_id`
+- `address`
+- `count`
+- `function`
+- `values`
+- `ok`
+
+## Быстрый старт
+
+### 1. Выбор target
+```bash
+idf.py set-target esp32
+```
+
+### 2. Сборка
+```bash
+idf.py build
+```
+
+### 3. Прошивка и монитор
+```bash
+idf.py -p <PORT> flash monitor
+```
+
+После запуска:
+1. Подключитесь к Wi‑Fi сети `MCBackend`.
+2. Отправляйте JSON‑RPC POST запросы на `http://<ip_платы>:8080/rpc`.
+
+## Пример запроса
 
 ```json
 {
